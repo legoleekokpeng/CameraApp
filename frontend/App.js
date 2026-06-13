@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, ActivityIndicator, Dimensions, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, ActivityIndicator, Dimensions, ScrollView, Alert } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
+
+// Add your ngrok URL here (do not include a trailing slash)
+const API_BASE_URL = 'https://YOUR_NGROK_URL_HERE.ngrok-free.app';
 
 const { width, height } = Dimensions.get('window');
 
@@ -25,6 +29,7 @@ export default function App() {
   // State Machine
   const [phase, setPhase] = useState('style_selection');
   const [selectedStyle, setSelectedStyle] = useState(null);
+  const [directives, setDirectives] = useState(null);
   
   // Scanning States
   const [isRecording, setIsRecording] = useState(false);
@@ -35,6 +40,52 @@ export default function App() {
   const [coachingStep, setCoachingStep] = useState(0);
 
   const cameraRef = useRef(null);
+
+  // --- API INTEGRATION: Upload Moodboard ---
+  const handleMoodboardUpload = async () => {
+    let result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setPhase('processing_moodboard');
+      
+      const localUri = result.assets[0].uri;
+      const filename = localUri.split('/').pop();
+      const match = /\.(\w+)$/.exec(filename);
+      const type = match ? `image/${match[1]}` : `image`;
+
+      const formData = new FormData();
+      formData.append('image', { uri: localUri, name: filename, type });
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/analyze-moodboard`, {
+          method: 'POST',
+          body: formData,
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        
+        const data = await response.json();
+        
+        setSelectedStyle({ 
+          title: data.name, 
+          style_id: data.style_id,
+          metrics: data.derived_metrics 
+        });
+        
+        setScanTimer(0);
+        setAlertIndex(0);
+        setIsRecording(false);
+        setPhase('scan_ready');
+      } catch (error) {
+        console.error('Moodboard upload failed:', error);
+        Alert.alert('Error', 'Failed to connect to backend.');
+        setPhase('style_selection');
+      }
+    }
+  };
 
   // Active Environmental Recording Scanning Loop
   useEffect(() => {
@@ -76,16 +127,44 @@ export default function App() {
     }
   }, [alertIndex, isRecording]);
 
-  // Handle simulated processing pipeline transition to coaching screen
+  // --- API INTEGRATION: Fetch Directives ---
   useEffect(() => {
     if (phase !== 'processing') return;
 
-    const transitionTimer = setTimeout(() => {
-      setPhase('coaching');
-    }, 3000);
+    const processEnvironmentAndDirectives = async () => {
+      try {
+        // 1. Mock the environment scan (you will replace this with actual video later)
+        const envFormData = new FormData();
+        envFormData.append('video', { uri: 'dummy_path', name: 'dummy.mp4', type: 'video/mp4' });
 
-    return () => clearTimeout(transitionTimer);
-  }, [phase]);
+        await fetch(`${API_BASE_URL}/analyze-environment`, {
+          method: 'POST',
+          body: envFormData,
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+
+        // 2. Fetch the coaching directives based on the session
+        const directivesResponse = await fetch(`${API_BASE_URL}/get-directives`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            style_id: selectedStyle?.style_id || 'default' 
+          })
+        });
+
+        const directivesData = await directivesResponse.json();
+        setDirectives(directivesData);
+        setPhase('coaching');
+
+      } catch (error) {
+        console.error('Directives fetch failed:', error);
+        Alert.alert('Error', 'Failed to retrieve coaching directives.');
+        setPhase('style_selection');
+      }
+    };
+
+    processEnvironmentAndDirectives();
+  }, [phase, selectedStyle]);
 
   if (!permission) return <View style={styles.centerContainer}><ActivityIndicator size="large" /></View>;
   if (!permission.granted) {
@@ -127,13 +206,7 @@ export default function App() {
           
           <TouchableOpacity 
             style={styles.moodboardFullCard}
-            onPress={() => {
-              setSelectedStyle({ title: "Custom Moodboard Inspired" });
-              setScanTimer(0);
-              setAlertIndex(0);
-              setIsRecording(false);
-              setPhase('scan_ready');
-            }}
+            onPress={handleMoodboardUpload}
           >
             <Text style={styles.moodboardTitleText}>🖼 Upload Reference Moodboard</Text>
             <Text style={styles.moodboardDescText}>Extract complex lighting geometries directly from custom graphics.</Text>
@@ -233,6 +306,19 @@ export default function App() {
           </SafeAreaView>
         )}
 
+        {/* --- PHASE 2.5: COMPILING MOODBOARD SCREEN --- */}
+        {phase === 'processing_moodboard' && (
+          <View style={styles.fullscreenOverlayBlur}>
+            <View style={styles.scanModal}>
+              <ActivityIndicator size="large" color="#007AFF" style={{ marginBottom: 15 }} />
+              <Text style={styles.instructionTitle}>Analysing Moodboard...</Text>
+              <Text style={styles.instructionSub}>
+                Extracting lighting geometries and depth maps via RekaAI.
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* --- PHASE 3: COMPILING LOADING SCREEN --- */}
         {phase === 'processing' && (
           <View style={styles.fullscreenOverlayBlur}>
@@ -285,22 +371,22 @@ export default function App() {
               
               {coachingStep === 0 && (
                 <View style={styles.directiveCard}>
-                  <Text style={styles.directiveLabel}>STEP 1/3: CAMERAMAN PLACEMENT</Text>
-                  <Text style={styles.directiveValue}>Take 2 paces backwards. Hold phone low at hip height, tilting up, and switch lens magnification to 1.5x zoom.</Text>
+                  <Text style={styles.directiveLabel}>STEP 1/3: {directives?.phase_control?.step?.toUpperCase() || 'CAMERAMAN PLACEMENT'}</Text>
+                  <Text style={styles.directiveValue}>{directives?.phase_control?.coaching || 'Loading...'}</Text>
                 </View>
               )}
 
               {coachingStep === 1 && (
                 <View style={[styles.directiveCard, { backgroundColor: 'rgba(255, 149, 0, 0.15)', borderColor: '#FF9500' }]}>
-                  <Text style={[styles.directiveLabel, { color: '#FF9500' }]}>STEP 2/3: MODEL PLACEMENT</Text>
-                  <Text style={styles.directiveValue}>Instruct the model to step inside the human wireframe silhouette. Lean weight onto their back leg and cross ankles.</Text>
+                  <Text style={[styles.directiveLabel, { color: '#FF9500' }]}>STEP 2/3: {directives?.visual_cues?.step?.toUpperCase() || 'MODEL PLACEMENT'}</Text>
+                  <Text style={styles.directiveValue}>{directives?.visual_cues?.coaching || 'Loading...'}</Text>
                 </View>
               )}
 
               {coachingStep === 2 && (
                 <View style={[styles.directiveCard, { backgroundColor: 'rgba(0, 255, 204, 0.15)', borderColor: '#00FFCC' }]}>
-                  <Text style={[styles.directiveLabel, { color: '#00FFCC' }]}>STEP 3/3: MICRO-EXPRESSIONS & DETAILED POSE</Text>
-                  <Text style={styles.directiveValue}>RekaAI Lock Active: Model should turn chin slightly toward left shoulder. Soften eyes, drop left hand casually inside jacket pocket.</Text>
+                  <Text style={[styles.directiveLabel, { color: '#00FFCC' }]}>STEP 3/3: {directives?.facial_guides?.step?.toUpperCase() || 'MICRO-EXPRESSIONS'}</Text>
+                  <Text style={styles.directiveValue}>{directives?.facial_guides?.coaching || 'Loading...'}</Text>
                 </View>
               )}
 
