@@ -4,8 +4,8 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 
 // Add your ngrok URL here (do not include a trailing slash)
-const API_BASE_URL = 'https://YOUR_NGROK_URL_HERE.ngrok-free.app';
-
+// Change this line in App.js:
+const API_BASE_URL = 'https://distract-pamphlet-factsheet.ngrok-free.dev';
 const { width, height } = Dimensions.get('window');
 
 const STYLE_OPTIONS = [
@@ -64,7 +64,8 @@ export default function App() {
         const response = await fetch(`${API_BASE_URL}/analyze-moodboard`, {
           method: 'POST',
           body: formData,
-          headers: { 'Content-Type': 'multipart/form-data' },
+          headers: {  'Content-Type': 'multipart/form-data',
+             'ngrok-skip-browser-warning': 'true' },
         });
         
         const data = await response.json();
@@ -133,20 +134,23 @@ export default function App() {
 
     const processEnvironmentAndDirectives = async () => {
       try {
-        // 1. Mock the environment scan (you will replace this with actual video later)
-        const envFormData = new FormData();
-        envFormData.append('video', { uri: 'dummy_path', name: 'dummy.mp4', type: 'video/mp4' });
-
+        // 1. Mock the environment scan using a simple JSON request, NOT a dummy file
         await fetch(`${API_BASE_URL}/analyze-environment`, {
           method: 'POST',
-          body: envFormData,
-          headers: { 'Content-Type': 'multipart/form-data' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true' 
+          },
+          body: JSON.stringify({ status: "mocked_scan" })
         });
 
         // 2. Fetch the coaching directives based on the session
         const directivesResponse = await fetch(`${API_BASE_URL}/get-directives`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true'
+          },
           body: JSON.stringify({ 
             style_id: selectedStyle?.style_id || 'default' 
           })
@@ -249,7 +253,7 @@ export default function App() {
   // --- CORE CAMERA VIEWPORTS ---
   return (
     <View style={styles.container}>
-      <CameraView style={StyleSheet.absoluteFillObject} ref={cameraRef}>
+      <CameraView style={StyleSheet.absoluteFillObject} ref={cameraRef} />
         
         {/* --- PHASE 2: INTEGRATED ENVIRONMENT VIEWPORT --- */}
         {phase === 'scan_ready' && (
@@ -472,7 +476,6 @@ export default function App() {
           </View>
         )}
 
-      </CameraView>
     </View>
   );
 }
