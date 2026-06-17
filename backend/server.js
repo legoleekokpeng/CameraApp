@@ -11,187 +11,255 @@ app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// ==========================================
-// 1. MOODBOARD UPLOAD (Powered by Reka Edge/Core)
-// ==========================================
-app.post('/analyze-moodboard', upload.single('image'), async (req, res) => {
+function fallbackResponse(reason) {
+  return {
+    source: 'fallback',
+    error_debug: reason,
+    session_id: 'fallback_mitigation_session',
+    phase_control: {
+      step: 'Camera',
+      coaching: 'Hold steady and keep the subject off-center.'
+    },
+    visual_cues: {
+      step: 'Pose',
+      coaching: 'Turn shoulders slightly and relax the posture.'
+    },
+    facial_guides: {
+      step: 'Expression',
+      coaching: 'Look slightly past the lens with relaxed eyes.'
+    }
+  };
+}
+
+function extractJson(text) {
+  if (!text) throw new Error('Empty AI response');
+
+  const cleaned = text.replace(/```json|```/g, '').trim();
+
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No image file provided.' });
+    return JSON.parse(cleaned);
+  } catch (firstError) {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw firstError;
+    return JSON.parse(match[0]);
+  }
+}
+
+app.get('/health', (req, res) => {
+  res.json({ ok: true, message: 'Backend is running' });
+});
+
+// ==========================================================
+// LIVE ADVICE ENDPOINT
+// This gives short advice while the user is still framing.
+// ==========================================================
+app.post('/analyze-live-frame', upload.single('image'), async (req, res) => {
+  try {
+    if (!process.env.REKA_API_KEY) {
+      return res.status(500).json({ error: 'Missing REKA_API_KEY in .env file.' });
     }
 
-    console.log('Processing moodboard image with Reka API...');
+    if (!req.file) {
+      return res.status(400).json({ error: 'No live frame received. Expected form field name: image.' });
+    }
 
     const base64Image = req.file.buffer.toString('base64');
-    const mimeType = req.file.mimetype;
+    const mimeType = req.file.mimetype || 'image/jpeg';
     const dataUrl = `data:${mimeType};base64,${base64Image}`;
 
     const prompt = `
-      Analyze this moodboard image. Return ONLY a JSON object:
-      {
-        "name": "Cinematic Lighting",
-        "style_id": "cinematic_01",
-        "derived_metrics": {
-          "lighting_type": "high contrast",
-          "focal_depth": "shallow"
-        }
-      }
-      Do not include markdown formatting or extra text.
-    `;
+You are Steve, a professional photography coach inside a mobile camera app.
+
+Look at this live camera frame and give ONE clear instruction before the user takes the photo.
+
+Your advice must be:
+- professional
+- simple
+- easy to understand
+- under 12 words
+- focused on one action only
+
+Focus on the most important issue:
+- framing
+- lighting
+- background
+- angle
+- subject position
+
+Good examples:
+"Move slightly left to clean the background."
+"Lower the camera for a stronger angle."
+"Place the subject closer to the light."
+"Step back to include more context."
+"Keep the subject slightly off-center."
+
+Bad examples:
+"Consider adjusting the overall compositional balance of the image."
+"The lighting may benefit from improved directional control."
+
+Return ONLY valid JSON:
+{
+  "live_advice": "one short professional instruction"
+}
+`.trim();
 
     const response = await fetch('https://api.reka.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.REKA_API_KEY}`
+        'X-Api-Key': process.env.REKA_API_KEY,
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "reka-edge", // You can use reka-edge if you need it to be faster
+        model: process.env.REKA_MODEL || 'reka-flash',
         messages: [
           {
-            role: "user",
+            role: 'user',
             content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: dataUrl } }
+              { type: 'image_url', image_url: { url: dataUrl } },
+              { type: 'text', text: prompt }
             ]
           }
-        ]
+        ],
+        temperature: 0.2,
+        max_tokens: 120,
+        stream: false
       })
     });
 
-    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-
-    const data = await response.json();
-    
-    // Safely extract text whether it's OpenAI format or native Reka format
-    let aiText = data.text || (data.choices && data.choices[0]?.message?.content) || "";
-    
-    const cleanJson = aiText.replace(/```json|```/g, '').trim();
-    const payload = JSON.parse(cleanJson);
-
-    console.log('Moodboard processed successfully.');
-    res.json(payload);
-
-  } catch (error) {
-    console.error('\n--- MOODBOARD API ERROR (Triggering Fallback) ---');
-    console.error(error.message);
-    
-    // THE SAFEGUARD: Never let the judges see an error.
-    res.json({
-      name: "Cyberpunk Edge (Fallback)",
-      style_id: "fallback_001",
-      derived_metrics: {
-        lighting_type: "Neon low-key, heavy shadows",
-        focal_depth: "Shallow depth of field"
-      }
-    });
-  }
-});
-
-// ==========================================
-// 2. ENVIRONMENT ROOM SCAN (Kept Mocked for Speed)
-// ==========================================
-app.post('/analyze-environment', upload.single('video'), (req, res) => {
-  console.log('Environment scan received (Mocked).');
-  res.json({
-    spatial_metric_1: 4.1, 
-    spatial_metric_2: 3.4, 
-    environmental_score: 0.82 
-  });
-});
-
-// ==========================================
-// 3. DYNAMIC COACHING DIRECTIVES (Powered by Reka)
-// ==========================================
-app.post('/get-directives', async (req, res) => {
-  try {
-    const requestedStyle = req.body.style_id || "default";
-    console.log(`Generating dynamic directives for style: ${requestedStyle}...`);
-
-    const prompt = `
-      You are an expert, highly technical Director of Photography. 
-      The user is shooting a portrait in the style of: "${requestedStyle}".
-      The model is already standing in a pre-set pose for this style.
-      
-      Generate 3 dynamic, highly specific, and actionable coaching directives.
-      Focus heavily on lighting manipulation, camera geometry, and environmental contrast.
-      Do not give generic advice. Use exact physical measurements, angles, and lighting terminology (e.g., 'key light', 'rim light', 'negative fill').
-      
-      Return ONLY a JSON object exactly like this with no markdown wrapping:
-      {
-        "session_id": "live_session_${Date.now()}",
-        "phase_control": {
-          "step": "Camera & Framing",
-          "coaching": "[1-2 sentences of exact camera angle, focal length, and distance]"
-        },
-        "visual_cues": {
-          "step": "Lighting & Environment",
-          "coaching": "[1-2 sentences on how to position the subject relative to the primary light source, and how to treat shadows/background]"
-        },
-        "facial_guides": {
-          "step": "Micro-Expressions",
-          "coaching": "[1-2 sentences of exact eye direction and emotional projection to match the lighting]"
-        }
-      }
-    `;
-    
-    const response = await fetch('https://api.reka.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.REKA_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "reka-edge", // <-- CHANGED to reka-edge to bypass free-tier limits
-        messages: [
-          { role: "user", content: prompt }
-        ]
-      })
-    });
-
-    // NEW ERROR HANDLER: Print the exact text Reka sends back
     if (!response.ok) {
-      const errorDetails = await response.text();
-      console.error('\n--- REKA EXPLAINED THE CRASH ---');
-      console.error('Status Code:', response.status);
-      console.error('Error Details:', errorDetails);
-      console.error('--------------------------------\n');
-      throw new Error(`Reka API Error: ${response.status}`);
+      const details = await response.text();
+      console.error('Reka live API error:', response.status, details);
+
+      return res.json({
+  source: 'fallback',
+  live_advice: 'Hold steady and keep the subject off-center.'
+});
     }
 
     const data = await response.json();
-    
-    let aiText = data.text || (data.choices && data.choices[0]?.message?.content) || "";
-    
-    const cleanJson = aiText.replace(/```json|```/g, '').trim();
-    const payload = JSON.parse(cleanJson);
+    const aiText = data.choices?.[0]?.message?.content || '';
 
-    console.log('Directives generated successfully.');
-    res.json(payload);
+    let parsed;
 
+    try {
+      parsed = extractJson(aiText);
+    } catch (error) {
+      parsed = {
+        source: 'reka_text_fallback',
+        live_advice: aiText.replace(/```json|```/g, '').trim() || 'Move closer and simplify the background.'
+      };
+    }
+
+    if (!parsed.live_advice) {
+      parsed.live_advice = 'Move closer and keep the subject clearly framed.';
+    }
+
+    return res.json(parsed);
   } catch (error) {
-    console.error('\n--- DIRECTIVES API ERROR (Triggering Fallback) ---');
-    console.error(error.message);
-    
-    // THE SAFEGUARD: Ensure the final coaching screen always works.
-    res.json({
-      session_id: "fallback_session",
-      phase_control: {
-        step: "Cameraman",
-        coaching: "Target locked. Hold the device steady at eye level and enable the 2x telephoto lens to compress the background."
-      },
-      visual_cues: {
-        step: "Pose",
-        coaching: "Have the subject angle their shoulders 45 degrees to the primary light source and shift weight to the back foot."
-      },
-      facial_guides: {
-        step: "Facial expression",
-        coaching: "Ask the subject to look slightly past the camera lens to create a candid, engaged look."
-      }
-    });
+    console.error('Live advice backend error:', error);
+
+    return res.json({
+  source: 'fallback',
+  live_advice: 'Move closer and simplify the background.'
+});
   }
 });
 
-app.listen(port, () => {
-  console.log(`Backend server is listening on port ${port}`);
+// ==========================================================
+// FINAL PHOTO ANALYSIS ENDPOINT
+// This gives full advice after taking the photo.
+// ==========================================================
+app.post('/analyze-moodboard', upload.single('image'), async (req, res) => {
+  try {
+    if (!process.env.REKA_API_KEY) {
+      return res.status(500).json({ error: 'Missing REKA_API_KEY in .env file.' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file received. Expected form field name: image.' });
+    }
+
+    const base64Image = req.file.buffer.toString('base64');
+    const mimeType = req.file.mimetype || 'image/jpeg';
+    const dataUrl = `data:${mimeType};base64,${base64Image}`;
+
+    const prompt = `
+You are Steve, a professional photography coach inside a mobile camera app.
+Analyze the uploaded photo and give concise, practical advice.
+
+Return ONLY valid JSON.
+No markdown.
+No extra explanation.
+
+Rules:
+- Each coaching sentence must be under 14 words.
+- Use simple and professional language.
+- Give direct actions, not long explanations.
+- Avoid vague words like "maybe", "consider", or "possibly".
+
+Use this exact JSON shape:
+{
+  "source": "reka",
+  "session_id": "realtime_reka_generation_frame",
+  "phase_control": {
+    "step": "Camera",
+    "coaching": "short action for framing, angle, or camera movement"
+  },
+  "visual_cues": {
+    "step": "Pose",
+    "coaching": "short action for body position or posture"
+  },
+  "facial_guides": {
+    "step": "Expression",
+    "coaching": "short action for face, eyes, or head direction"
+  }
+}
+`.trim();
+
+    const response = await fetch('https://api.reka.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': process.env.REKA_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: process.env.REKA_MODEL || 'reka-flash',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: dataUrl } },
+              { type: 'text', text: prompt }
+            ]
+          }
+        ],
+        temperature: 0.2,
+        max_tokens: 500,
+        stream: false
+      })
+    });
+
+    if (!response.ok) {
+      const details = await response.text();
+      console.error('Reka API error:', response.status, details);
+
+      // Return fallback as 200 so the mobile app still receives advice.
+      return res.json(fallbackResponse(`Reka API error ${response.status}: ${details}`));
+    }
+
+    const data = await response.json();
+    const aiText = data.choices?.[0]?.message?.content || '';
+    const parsed = extractJson(aiText);
+
+    return res.json(parsed);
+  } catch (error) {
+    console.error('Backend error:', error);
+
+    // Return fallback as 200 so Expo does not show network failure.
+    return res.json(fallbackResponse(error.message));
+  }
+});
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Backend listening on http://0.0.0.0:${port}`);
 });
