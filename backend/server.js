@@ -109,26 +109,28 @@ app.post('/get-directives', async (req, res) => {
     console.log(`Generating dynamic directives for style: ${requestedStyle}...`);
 
     const prompt = `
-      You are an expert, highly technical photography director. 
+      You are an expert, highly technical Director of Photography. 
       The user is shooting a portrait in the style of: "${requestedStyle}".
+      The model is already standing in a pre-set pose for this style.
       
-      Generate 3 dynamic, highly specific, and actionable coaching directives for this exact style.
-      Do not give generic advice. Give exact physical measurements, angles, and emotional cues.
+      Generate 3 dynamic, highly specific, and actionable coaching directives.
+      Focus heavily on lighting manipulation, camera geometry, and environmental contrast.
+      Do not give generic advice. Use exact physical measurements, angles, and lighting terminology (e.g., 'key light', 'rim light', 'negative fill').
       
       Return ONLY a JSON object exactly like this with no markdown wrapping:
       {
         "session_id": "live_session_${Date.now()}",
         "phase_control": {
-          "step": "Cameraman",
-          "coaching": "[1-2 sentences of exact camera angle, lens choice, and distance]"
+          "step": "Camera & Framing",
+          "coaching": "[1-2 sentences of exact camera angle, focal length, and distance]"
         },
         "visual_cues": {
-          "step": "Pose",
-          "coaching": "[1-2 sentences of exact limb placement and body weight distribution]"
+          "step": "Lighting & Environment",
+          "coaching": "[1-2 sentences on how to position the subject relative to the primary light source, and how to treat shadows/background]"
         },
         "facial_guides": {
-          "step": "Facial expression",
-          "coaching": "[1-2 sentences of exact eye direction, jaw tension, and emotional projection]"
+          "step": "Micro-Expressions",
+          "coaching": "[1-2 sentences of exact eye direction and emotional projection to match the lighting]"
         }
       }
     `;
